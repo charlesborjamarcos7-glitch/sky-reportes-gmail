@@ -2,6 +2,9 @@
 import base64
 import os
 import re
+import logging
+
+logger = logging.getLogger(__name__)
 from email.message import EmailMessage
 
 SCOPE = 'https://www.googleapis.com/auth/gmail.send'
@@ -46,10 +49,9 @@ def enviar_pdf(destinatario, archivo, pdf):
     )
     creds.refresh(Request())
     servicio = build('gmail', 'v1', credentials=creds, cache_discovery=False)
-    perfil = servicio.users().getProfile(userId='me').execute()
-    remitente = perfil.get('emailAddress')
+    # gmail.send NO autoriza users.getProfile. Gmail identifica al remitente
+    # desde la cuenta OAuth, sin consultar el perfil ni ampliar los permisos.
     msg = EmailMessage()
-    msg['From'] = remitente
     msg['To'] = destinatario
     msg['Subject'] = 'Sky — Reporte de inventario'
     msg.set_content('Adjunto encontrarás el reporte PDF generado desde Sky — Agente de IA para Almacén.')
@@ -57,3 +59,38 @@ def enviar_pdf(destinatario, archivo, pdf):
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode('ascii')
     resultado = servicio.users().messages().send(userId='me', body={'raw': raw}).execute()
     return {'id': resultado.get('id'), 'destinatario': destinatario, 'archivo': archivo}
+
+
+def diagnosticar_error_envio(exc):
+    """Explicación segura para la UI; evita mostrar tokens y datos sensibles."""
+    try:
+        from google.auth.exceptions import RefreshError
+        from googleapiclient.errors import HttpError
+    except ImportError:
+        RefreshError = ()
+        HttpError = ()
+
+    if isinstance(exc, RefreshError):
+        return ('Google rechazó la autorización OAuth. Verifica que CLIENT_ID, '
+                'CLIENT_SECRET y REFRESH_TOKEN correspondan a la misma autorización. '
+                'Si el token caducó o fue revocado, genera uno nuevo con permiso gmail.send.')
+    if isinstance(exc, HttpError):
+        estado = getattr(getattr(exc, 'resp', None), 'status', None)
+        if estado == 401:
+            return 'Gmail rechazó las credenciales (HTTP 401). Revisa el token OAuth.'
+        if estado == 403:
+            return ('Gmail denegó la operación (HTTP 403). Comprueba que la API de Gmail '
+                    'esté habilitada y que el token tenga permiso gmail.send.')
+        if estado == 429:
+            return 'Gmail aplicó un límite de solicitudes (HTTP 429). Espera antes de probar.'
+        if estado is not None:
+            return f'Gmail respondió con un error HTTP {estado}. Revisa el registro del servidor.'
+        return 'Gmail devolvió un error de API. Revisa el registro del servidor.'
+    if isinstance(exc, (ValueError, RuntimeError)):
+        # Solo mensajes conocidos, no exponer detalles externos.
+        texto = str(exc)
+        if texto.startswith(('Introduce una dirección', 'Ese destinatario', 'Configura GMAIL_',
+                             'Faltan credenciales', 'PDF inválido', 'Nombre de archivo')):
+            return texto
+    return ('No se pudo confirmar el envío. Consulta los registros de Streamlit. '
+            'Antes de reintentar, revisa la carpeta Enviados de Gmail.')

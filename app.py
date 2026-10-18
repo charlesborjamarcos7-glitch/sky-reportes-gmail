@@ -1,5 +1,6 @@
 """Sky — Streamlit, dos agentes especializados (consultas / PDF y Gmail)."""
 import hmac
+import logging
 import os
 import uuid
 from datetime import date, datetime, timedelta
@@ -51,7 +52,7 @@ with st.sidebar:
         st.rerun()
 st.title("Sky · Agente de Reportes y Gmail")
 from agente_reportes import TIPOS, REQUIEREN_FECHAS, REQUIEREN_CODIGO, REQUIEREN_ABC, generar_reporte
-from gmail_cloud import validar_destinatario, configurado, enviar_pdf
+from gmail_cloud import validar_destinatario, configurado, enviar_pdf, diagnosticar_error_envio
 st.header('📄 Agente 2 — Reportes PDF y Gmail')
 st.caption('Selecciona el reporte con botones, genera el PDF y decide si quieres enviarlo.')
 etiqueta = st.selectbox('¿Qué reporte quieres generar?', list(TIPOS))
@@ -136,5 +137,6 @@ if documento:
                         try:
                             resultado_envio = enviar_pdf(confirmacion['destinatario'], documento['archivo'], documento['pdf'])
                             st.success('Gmail aceptó el correo para ' + resultado_envio['destinatario'] + '. ID: ' + str(resultado_envio['id']))
-                        except Exception:
-                            st.error('No se pudo confirmar el envío. Revisa los logs y el correo recibido antes de volver a intentarlo.')
+                        except Exception as exc:
+                            logging.getLogger('sky.gmail').error('Fallo Gmail en etapa de envío: %s', type(exc).__name__)
+                            st.error(diagnosticar_error_envio(exc))
